@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Giám sát té ngã — tienviet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;800&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mqtt@4.3.7/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<style>
+  :root {
+    --paper:#EAEFF2; --panel:#FFFFFF; --ink:#10242D; --mute:#5F7480; --line:#D3DDE3;
+    --calm:#0E8F7E; --warn:#D98B0B; --alarm:#D6283B; --manual:#2F5BD3; --idle:#7C8D97;
+    --sans:"Be Vietnam Pro","Segoe UI",system-ui,sans-serif; --mono:"IBM Plex Mono",Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:400 15px/1.55 var(--sans); }
+  .page { max-width:1180px; margin:0 auto; padding:20px 20px 48px; }
+
+  .bar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .bar h1 { margin:0; font-size:18px; font-weight:800; letter-spacing:-.01em; }
+  .bar h1 span { color:var(--mute); font-weight:400; }
+  .link { display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:99px; background:var(--panel);
+          border:1px solid var(--line); font-size:13px; font-weight:500; }
+  .link i { width:8px; height:8px; border-radius:50%; background:var(--idle); }
+  .link[data-state="ok"] i { background:var(--calm); box-shadow:0 0 0 4px rgba(14,143,126,.18); }
+  .link[data-state="wait"] i { background:var(--warn); }
+  .link[data-state="off"] i { background:var(--alarm); }
+
+  /* Khối trạng thái: đổi màu cả khối theo tình huống */
+  .hero { --c:var(--calm); --fg:var(--ink); --bg:var(--panel); --sub:var(--mute);
+          display:grid; grid-template-columns:1.25fr 240px 1fr; gap:28px; align-items:center;
+          padding:30px 34px; border-radius:20px; background:var(--bg); color:var(--fg);
+          border:1px solid var(--line); border-left:10px solid var(--c); transition:background .4s, border-color .4s; }
+  .hero[data-state="warn"]   { --c:var(--warn); --bg:#FFF4DD; }
+  .hero[data-state="manual"] { --c:var(--manual); --bg:#E9EFFD; }
+  .hero[data-state="idle"]   { --c:var(--idle); --bg:#E3E8EB; }
+  .hero[data-state="fall"]   { --c:#fff; --bg:var(--alarm); --fg:#fff; --sub:rgba(255,255,255,.82); border-color:#8E1224; animation:pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 10px rgba(214,40,59,.22); } }
+  .word { margin:0; font-size:clamp(32px,5vw,54px); font-weight:800; letter-spacing:-.03em; line-height:1.05; }
+  .desc { margin:10px 0 0; max-width:36ch; color:var(--sub); }
+  .last { margin:18px 0 0; font-size:13px; color:var(--sub); }
+  .last b { font-family:var(--mono); color:var(--fg); }
+
+  .fig svg { width:100%; display:block; }
+  .fig .person { transform-origin:100px 168px; transition:transform .45s cubic-bezier(.3,.7,.3,1); }
+  .fig .person * { stroke:var(--fg); fill:none; stroke-width:9; stroke-linecap:round; }
+  .fig .person circle { fill:var(--fg); stroke:none; }
+  .fig .ground { stroke:var(--sub); stroke-width:2; opacity:.5; }
+
+  .metric { display:grid; gap:14px; }
+  .metric div { padding-left:16px; border-left:3px solid var(--c); }
+  .metric small { display:block; color:var(--sub); font-size:12.5px; }
+  .metric strong { font-family:var(--mono); font-size:44px; font-weight:600; line-height:1.05; letter-spacing:-.03em; }
+  .metric em { font-style:normal; font-size:18px; color:var(--sub); margin-left:4px; }
+
+  .row { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; margin-top:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:18px 20px; }
+  .card h2 { margin:0 0 2px; font-size:15px; font-weight:600; }
+  .card p.sub { margin:0 0 12px; font-size:12.5px; color:var(--mute); }
+
+  .axes { display:grid; gap:10px; }
+  .axis { display:grid; grid-template-columns:28px 1fr 56px; gap:10px; align-items:center; font-family:var(--mono); font-size:13px; }
+  .track { position:relative; height:8px; border-radius:99px; background:#E3EAEE; }
+  .track::after { content:""; position:absolute; left:50%; top:-3px; bottom:-3px; width:2px; background:var(--mute); opacity:.5; }
+  .fill { position:absolute; top:0; bottom:0; border-radius:99px; background:var(--calm); transition:left .25s, width .25s; }
+  .axis output { text-align:right; }
+  .angles { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; }
+  .angles div { background:var(--paper); border-radius:12px; padding:10px 12px; }
+  .angles small { display:block; font-size:12px; color:var(--mute); }
+  .angles strong { font-family:var(--mono); font-size:22px; font-weight:600; }
+
+  .chartbox { height:210px; position:relative; }
+
+  .ctrl { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  .tile { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:16px 18px; border-radius:14px;
+          border:2px solid var(--line); background:var(--panel); color:var(--ink); font:600 16px var(--sans); text-align:left; cursor:pointer;
+          transition:border-color .2s, background .2s; }
+  .tile small { display:block; font-weight:400; font-size:13px; color:var(--mute); }
+  .tile:hover:not(:disabled) { border-color:var(--ink); }
+  .tile[aria-checked="true"].led  { border-color:var(--warn);  background:#FFF4DD; }
+  .tile[aria-checked="true"].buzz { border-color:var(--alarm); background:#FDE8EB; }
+  .knob { flex:none; width:46px; height:26px; border-radius:99px; background:#C3CFD6; position:relative; transition:background .2s; }
+  .knob::after { content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; transition:transform .2s; }
+  .tile[aria-checked="true"] .knob::after { transform:translateX(20px); }
+  .tile.led[aria-checked="true"] .knob { background:var(--warn); }
+  .tile.buzz[aria-checked="true"] .knob { background:var(--alarm); }
+  .auto { border:2px solid var(--manual); background:transparent; color:var(--manual); border-radius:14px; font:600 15px var(--sans); padding:14px 18px; cursor:pointer; }
+  .auto:hover:not(:disabled) { background:var(--manual); color:#fff; }
+  .tile:disabled, .auto:disabled { opacity:.45; cursor:not-allowed; }
+  :focus-visible { outline:3px solid var(--manual); outline-offset:2px; }
+  .modeline { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:12px; }
+  .modeline b { color:var(--manual); }
+  .ack { margin:12px 0 0; padding:9px 13px; border-radius:10px; background:var(--paper); font-size:13.5px; }
+  .ack[data-kind="ok"]   { background:#DDF3EE; color:#0A6256; }
+  .ack[data-kind="wait"] { background:#FFF0CF; color:#7A4E00; }
+  .ack[data-kind="bad"]  { background:#FBE0E4; color:#9A1626; }
+  .note { margin:10px 0 0; font-size:12.5px; color:var(--mute); }
+
+  .events { list-style:none; margin:0; padding:0; }
+  .events li { display:grid; grid-template-columns:84px 12px 1fr; gap:12px; align-items:center; padding:9px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .events li:last-child { border-bottom:0; }
+  .events time { font-family:var(--mono); font-size:13px; color:var(--mute); }
+  .events i { width:10px; height:10px; border-radius:50%; background:var(--calm); }
+  .events .warn i { background:var(--warn); } .events .fall i { background:var(--alarm); }
+  .events .empty { color:var(--mute); display:block; grid-column:1/-1; }
+  .foot { margin-top:18px; text-align:center; font-family:var(--mono); font-size:12px; color:var(--mute); }
+
+  @media (max-width:900px) { .hero { grid-template-columns:1fr 150px; } .metric { grid-column:1/-1; grid-template-columns:1fr 1fr; } }
+  @media (max-width:560px) { .hero { grid-template-columns:1fr; padding:22px; } .fig { max-width:170px; } }
+  @media (prefers-reduced-motion:reduce) { .hero, .person, .fill, .knob::after { transition:none; animation:none !important; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="bar">
+    <h1>Giám sát té ngã <span>· ESP32 + MPU6050</span></h1>
+    <div class="link" id="link" data-state="wait" role="status" aria-live="polite"><i></i><span id="linkText">Đang kết nối broker...</span></div>
+  </header>
+
+  <section class="hero" id="stage" data-state="idle" aria-live="polite">
+    <div>
+      <p class="word" id="stateWord">Chờ dữ liệu</p>
+      <p class="desc" id="stateDesc">Trang đang chờ bản tin đầu tiên từ ESP32.</p>
+      <p class="last">Té ngã gần nhất: <b id="lastFall">chưa ghi nhận</b></p>
+    </div>
+    <div class="fig">
+      <svg viewBox="0 0 200 190" role="img" aria-label="Tư thế cơ thể theo góc nghiêng">
+        <line class="ground" x1="10" y1="172" x2="190" y2="172"/>
+        <g class="person" id="figure">
+          <circle cx="100" cy="36" r="14"/>
+          <path d="M100 56 V112"/><path d="M100 70 L78 100 M100 70 L122 100"/><path d="M100 112 L86 168 M100 112 L114 168"/>
+        </g>
+      </svg>
+    </div>
+    <div class="metric">
+      <div><small>Góc nghiêng so với tư thế đứng</small><strong id="tilt" class="value-tilt">--</strong><em>°</em></div>
+      <div><small>Gia tốc tổng</small><strong id="accel" class="value-accel">-.--</strong><em>g</em></div>
+    </div>
+  </section>
+
+  <section class="row">
+    <div class="card">
+      <h2>Gia tốc theo trục</h2>
+      <p class="sub">Đứng yên khoảng 1 g. Dưới 0,4 g là rơi tự do, trên 2,5 g là va đập.</p>
+      <div class="axes">
+        <div class="axis"><b>ax</b><div class="track"><div class="fill" id="barX"></div></div><output class="value-ax">--</output></div>
+        <div class="axis"><b>ay</b><div class="track"><div class="fill" id="barY"></div></div><output class="value-ay">--</output></div>
+        <div class="axis"><b>az</b><div class="track"><div class="fill" id="barZ"></div></div><output class="value-az">--</output></div>
+      </div>
+      <div class="angles">
+        <div><small>Pitch (trước/sau)</small><strong><span class="value-pitch">--</span>°</strong></div>
+        <div><small>Roll (trái/phải)</small><strong><span class="value-roll">--</span>°</strong></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Gia tốc tổng theo thời gian</h2>
+      <p class="sub">40 lần gửi gần nhất, đường đứt là ngưỡng 0,4 g và 2,5 g</p>
+      <div class="chartbox"><canvas id="accChart" aria-label="Biểu đồ gia tốc tổng"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Góc nghiêng theo thời gian</h2>
+      <p class="sub">40 lần gửi gần nhất, đường đứt là ngưỡng 60°</p>
+      <div class="chartbox"><canvas id="tiltChart" aria-label="Biểu đồ góc nghiêng"></canvas></div>
+    </div>
+  </section>
+
+  <section class="row" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+    <div class="card" aria-label="Điều khiển đèn và còi">
+      <div class="modeline"><h2>Điều khiển thủ công</h2><span>Chế độ: <b id="modeText">Tự động</b></span></div>
+      <div class="ctrl">
+        <button class="tile led" id="btnLed" role="switch" aria-checked="false" disabled><span>Đèn cảnh báo<small id="ledText">Đang tắt</small></span><span class="knob"></span></button>
+        <button class="tile buzz" id="btnBuzzer" role="switch" aria-checked="false" disabled><span>Còi cảnh báo<small id="buzText">Đang tắt</small></span><span class="knob"></span></button>
+        <button class="auto" id="btnAuto" disabled>Về tự động</button>
+      </div>
+      <p class="ack" id="ack" role="status" aria-live="polite">Bấm công tắc để gửi lệnh; dòng này báo ESP32 đã làm theo hay chưa.</p>
+      <p class="note">Công tắc chỉ đổi khi ESP32 báo lại trạng thái thật. Tự về tự động sau 10 giây, hoặc ngay khi có té ngã mới.</p>
+    </div>
+    <div class="card">
+      <h2>Nhật ký sự kiện</h2>
+      <p class="sub">Mỗi lần trạng thái thay đổi</p>
+      <ol class="events" id="events"><li class="empty-row"><span class="empty">Chưa có sự kiện nào.</span></li></ol>
+    </div>
+  </section>
+
+  <p class="foot" id="foot">Topic dữ liệu: tienviet/falldetect/data · Topic lệnh: tienviet/falldetect/cmd</p>
+</div>
+
+<script>
+  // Phải trùng với sketch.ino của ESP32.
+  const BROKER_URL = "wss://broker.emqx.io:8084/mqtt";
+  const TOPIC_DATA = "tienviet/falldetect/data";
+  const TOPIC_CMD  = "tienviet/falldetect/cmd";
+  const MAX_POINTS = 40, FREEFALL_G = 0.4, IMPACT_G = 2.5, TILT_LYING = 60.0;
+
+  const $ = (id) => document.getElementById(id);
+  const setByClass = (cls, text) => document.querySelectorAll("." + cls).forEach((el) => { el.textContent = text; });
+  const state = { led: false, buzzer: false, mode: "auto", alert: null };
+  let pending = null, lastMsg = 0;
+  const EXPECT = {
+    led_on:     (d) => d.mode === "manual" && Number(d.led) === 1,
+    led_off:    (d) => d.mode === "manual" && Number(d.led) === 0,
+    buzzer_on:  (d) => d.mode === "manual" && Number(d.buzzer) === 1,
+    buzzer_off: (d) => d.mode === "manual" && Number(d.buzzer) === 0,
+    auto:       (d) => d.mode === "auto",
+  };
+  function setAck(kind, text) { $("ack").dataset.kind = kind; $("ack").textContent = text; }
+
+  // ---- Biểu đồ ----
+  const thresholdPlugin = {
+    id: "thresholds",
+    afterDatasetsDraw(chart, args, opts) {
+      if (!opts.values) return;
+      const { ctx, chartArea, scales } = chart;
+      ctx.save(); ctx.setLineDash([6, 5]); ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(214,40,59,.85)";
+      opts.values.forEach((v) => {
+        const y = scales.y.getPixelForValue(v);
+        if (y < chartArea.top || y > chartArea.bottom) return;
+        ctx.beginPath(); ctx.moveTo(chartArea.left, y); ctx.lineTo(chartArea.right, y); ctx.stroke();
+      });
+      ctx.restore();
+    },
+  };
+  function makeChart(id, color, values, suggest) {
+    const tick = { color: "#5F7480", font: { family: "IBM Plex Mono", size: 11 } };
+    return new Chart($(id).getContext("2d"), {
+      type: "line", plugins: [thresholdPlugin],
+      data: { labels: [], datasets: [{ data: [], borderColor: color, backgroundColor: color + "22", fill: true, borderWidth: 2.5, pointRadius: 0, tension: 0.3 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { intersect: false, mode: "index" },
+        plugins: { legend: { display: false }, thresholds: { values }, tooltip: { displayColors: false } },
+        scales: {
+          x: { ticks: { ...tick, maxTicksLimit: 5, maxRotation: 0 }, grid: { display: false } },
+          y: { suggestedMin: suggest[0], suggestedMax: suggest[1], ticks: { ...tick, maxTicksLimit: 6 }, grid: { color: "#E3EAEE" }, border: { display: false } },
+        },
+      },
+    });
+  }
+  const accChart = makeChart("accChart", "#0E8F7E", [FREEFALL_G, IMPACT_G], [0, 3]);
+  const tiltChart = makeChart("tiltChart", "#2F5BD3", [TILT_LYING], [0, 90]);
+  function addPoint(chart, label, value) {
+    chart.data.labels.push(label);
+    chart.data.datasets[0].data.push(value);
+    if (chart.data.labels.length > MAX_POINTS) { chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
+    chart.update("none");
+  }
+
+  // ---- Trạng thái và nhật ký ----
+  const STATES = {
+    none:   ["ok",     "Đang đứng vững",      "Không có dấu hiệu bất thường. Đèn và còi đang tắt."],
+    impact: ["warn",   "Có va đập",           "Gia tốc vượt ngưỡng va đập hoặc rơi tự do. Đèn cảnh báo đang bật."],
+    tilt:   ["warn",   "Nghiêng bất thường",  "Cơ thể nghiêng đột ngột hoặc đang nằm. Đèn cảnh báo đang bật."],
+    fall:   ["fall",   "Phát hiện té ngã",    "Có va đập kèm góc nghiêng đổi đột ngột. Còi đang kêu, hãy kiểm tra người dùng ngay."],
+    manual: ["manual", "Điều khiển thủ công", "Đèn và còi đang theo lệnh từ trang này. Tự về tự động sau 10 giây."],
+  };
+  const LOG_TEXT = { none: "Trở lại bình thường", impact: "Phát hiện va đập", tilt: "Nghiêng bất thường", fall: "Phát hiện té ngã", manual: "Chuyển sang điều khiển thủ công" };
+  function addEvent(cls, text) {
+    const list = $("events");
+    const empty = list.querySelector(".empty-row"); if (empty) empty.remove();
+    const li = document.createElement("li");
+    li.className = cls;
+    li.innerHTML = "<time></time><i></i><span></span>";
+    li.querySelector("time").textContent = new Date().toLocaleTimeString("vi-VN");
+    li.querySelector("span").textContent = text;
+    list.prepend(li);
+    while (list.children.length > 8) list.lastElementChild.remove();
+  }
+  function renderState(code) {
+    const key = STATES[code] ? code : "none", s = STATES[key];
+    $("stage").dataset.state = s[0];
+    $("stateWord").textContent = s[1];
+    $("stateDesc").textContent = s[2];
+    if (state.alert !== key) {
+      if (state.alert !== null || key !== "none") addEvent(s[0] === "fall" ? "fall" : s[0] === "warn" ? "warn" : "ok", LOG_TEXT[key]);
+      if (key === "fall") $("lastFall").textContent = new Date().toLocaleTimeString("vi-VN");
+      state.alert = key;
+    }
+  }
+  function setBar(id, v) {
+    const c = Math.max(-3, Math.min(3, v)) / 3 * 50, bar = $(id).style;
+    bar.left = (c < 0 ? 50 + c : 50) + "%";
+    bar.width = Math.abs(c) + "%";
+  }
+
+  function onData(payload) {
+    let d;
+    try { d = JSON.parse(payload.toString()); } catch (e) { return; }
+    const a = Number(d.a), tilt = Number(d.tilt), pitch = Number(d.pitch), roll = Number(d.roll);
+    const ax = Number(d.ax), ay = Number(d.ay), az = Number(d.az);
+    if (![a, tilt, pitch, roll].every(Number.isFinite)) return;
+    lastMsg = Date.now();
+    const time = new Date().toLocaleTimeString("vi-VN");
+
+    setByClass("value-accel", a.toFixed(2));
+    setByClass("value-tilt", tilt.toFixed(0));
+    setByClass("value-pitch", pitch.toFixed(1));
+    setByClass("value-roll", roll.toFixed(1));
+    if ([ax, ay, az].every(Number.isFinite)) {
+      setByClass("value-ax", ax.toFixed(2)); setByClass("value-ay", ay.toFixed(2)); setByClass("value-az", az.toFixed(2));
+      setBar("barX", ax); setBar("barY", ay); setBar("barZ", az);
+      const side = Math.abs(ax) >= Math.abs(ay) ? Math.sign(ax) || 1 : Math.sign(ay) || 1;
+      $("figure").style.transform = "rotate(" + (tilt * side).toFixed(1) + "deg)";
+    }
+    addPoint(accChart, time, a);
+    addPoint(tiltChart, time, tilt);
+
+    state.led = Number(d.led) === 1;
+    state.buzzer = Number(d.buzzer) === 1;
+    state.mode = String(d.mode || "auto");
+    $("btnLed").setAttribute("aria-checked", String(state.led));
+    $("btnBuzzer").setAttribute("aria-checked", String(state.buzzer));
+    $("ledText").textContent = state.led ? "Đang sáng" : "Đang tắt";
+    $("buzText").textContent = state.buzzer ? "Đang kêu" : "Đang tắt";
+    $("modeText").textContent = state.mode === "manual" ? "Thủ công" : "Tự động";
+    renderState(String(d.alert || "none"));
+    if (pending && EXPECT[pending.cmd](d)) {
+      setAck("ok", "ESP32 đã làm theo lệnh " + pending.cmd + " sau " + ((Date.now() - pending.at) / 1000).toFixed(1) + " giây.");
+      pending = null;
+    }
+    $("foot").textContent = "Cập nhật lúc " + time + " · " + TOPIC_DATA;
+  }
+
+  // ---- MQTT ----
+  function setLink(kind, text) { $("link").dataset.state = kind; $("linkText").textContent = text; }
+  function setButtons(on) { ["btnLed", "btnBuzzer", "btnAuto"].forEach((id) => { $(id).disabled = !on; }); }
+  const client = mqtt.connect(BROKER_URL, {
+    clientId: "tienviet-web-" + Math.random().toString(16).slice(2, 10),
+    reconnectPeriod: 2000, connectTimeout: 8000, clean: true,
+  });
+  client.on("connect", () => { setLink("ok", "Đã kết nối broker"); client.subscribe(TOPIC_DATA, { qos: 0 }); setButtons(true); });
+  client.on("reconnect", () => { setLink("wait", "Đang kết nối lại..."); setButtons(false); });
+  client.on("offline", () => { setLink("off", "Mất kết nối broker"); setButtons(false); });
+  client.on("error", (err) => { setLink("off", "Lỗi: " + err.message); setButtons(false); });
+  client.on("message", (topic, payload) => { if (topic === TOPIC_DATA) onData(payload); });
+
+  function send(cmd) {
+    if (!client.connected) { setAck("bad", "Trang chưa kết nối broker nên chưa gửi được lệnh " + cmd + "."); return; }
+    client.publish(TOPIC_CMD, cmd, { qos: 0, retain: false });
+    pending = { cmd, at: Date.now() };
+    setAck("wait", "Đã gửi lệnh " + cmd + ", đang chờ ESP32 xác nhận...");
+  }
+  $("btnLed").addEventListener("click", () => send(state.led ? "led_off" : "led_on"));
+  $("btnBuzzer").addEventListener("click", () => send(state.buzzer ? "buzzer_off" : "buzzer_on"));
+  $("btnAuto").addEventListener("click", () => send("auto"));
+
+  setInterval(() => {
+    if (pending && Date.now() - pending.at > 3000) {
+      setAck("bad", "ESP32 chưa làm theo lệnh " + pending.cmd + " sau 3 giây. Kiểm tra Wokwi đang Run và Serial có dòng Nhan lenh.");
+      pending = null;
+    }
+    if (lastMsg && Date.now() - lastMsg > 5000) {
+      $("stage").dataset.state = "idle";
+      $("stateWord").textContent = "Mất dữ liệu";
+      $("stateDesc").textContent = "Hơn 5 giây không có bản tin mới. Kiểm tra mạch đang chạy và Wi-Fi của ESP32.";
+    }
+  }, 1000);
+</script>
+</body>
+</html>
